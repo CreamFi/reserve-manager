@@ -7,6 +7,7 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./interfaces/IComptroller.sol";
 import "./interfaces/ICToken.sol";
 import "./interfaces/ICTokenAdmin.sol";
+import "./interfaces/IBurner.sol";
 
 contract ReserveManager is Ownable {
     using SafeERC20 for IERC20;
@@ -116,6 +117,8 @@ contract ReserveManager is Ownable {
             }
 
             // TODO: use burner to convert tokens.
+            address burner = burners[underlying];
+            require(IBurner(burner).burn(underlying), "Burner failed to burn the underlying token");
 
             // TODO: fix event for dispatch.
             emit Dispatch(underlying, reduceAmount, 0);
