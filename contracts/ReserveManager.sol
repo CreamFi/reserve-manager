@@ -14,12 +14,17 @@ contract ReserveManager is Ownable {
 
     uint public constant COOLDOWN_PERIOD = 1 days;
     address public constant ethAddress = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
+    address public constant usdcAddress = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
 
     /**
      * @notice comptroller contract
      */
     IComptroller public immutable comptroller;
 
+     /**
+     * @notice usdc burner contract
+     */
+    IBurner public immutable usdcBurner;
     /**
      * @notice the extraction ratio, scaled by 1e18
      */
@@ -82,17 +87,24 @@ contract ReserveManager is Ownable {
 
     constructor(
         address _owner,
-        IComptroller _comptroller
+        IComptroller _comptroller,
+        IBurner _usdcBurner
     ) {
         transferOwnership(_owner);
         comptroller = _comptroller;
+        usdcBurner = _usdcBurner;
     }
 
     function getBlockTimestamp() public virtual view returns (uint) {
         return block.timestamp;
     }
 
-    function dispatch(address cToken) external {
+    /**
+     * @notice Execute reduce reserve for cToken
+     * @param cToken The cToken to dispatch reduce reserve operation
+     * @param batchJob indicate whether this function call is within a multiple cToken batch job
+     */
+    function dispatch(address cToken, bool batchJob) external {
         require(comptroller.isMarketListed(cToken), "market not listed");
 
         uint totalReserves = ICToken(cToken).totalReserves();
@@ -116,8 +128,6 @@ contract ReserveManager is Ownable {
                 underlying = ICToken(cToken).underlying();
             }
 
-            // TODO: use burner to convert tokens.
-            address burner = burners[underlying];
             require(IBurner(burner).burn(underlying), "Burner failed to burn the underlying token");
 
             // TODO: fix event for dispatch.
@@ -129,8 +139,22 @@ contract ReserveManager is Ownable {
             timestamp: getBlockTimestamp(),
             totalReserves: totalReserves
         });
+        // A standalone reduce-reserve operation followed by a final USDC burn
+        if (!batchJob){
+            IBurner(usdcBurner).burn(usdcAddress);
+        }
     }
-
+    
+    /**
+     * @notice Execute reduce reserve and burn on multiple cTokens
+     * @param cTokens The token address list
+     */
+    function dispatchMultiple(address[] memory cTokens) external {
+        for (uint i = 0; i < cTokens.length; i++) {
+            this.dispatch(cTokens[i], true);
+        }
+        IBurner(usdcBurner).burn(usdcAddress);
+    }
     /* Admin functions */
 
     function setCTokenAdmins(address[] memory cTokens, address[] memory newCTokenAdmins) external onlyOwner {
