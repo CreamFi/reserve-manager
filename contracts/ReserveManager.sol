@@ -94,6 +94,9 @@ contract ReserveManager is Ownable {
         transferOwnership(_owner);
         comptroller = _comptroller;
         usdcBurner = _usdcBurner;
+
+        // Set default ratio to 50%.
+        ratio = 0.5e18;
     }
 
     function getBlockTimestamp() public virtual view returns (uint) {
@@ -146,7 +149,7 @@ contract ReserveManager is Ownable {
             IBurner(usdcBurner).burn(usdcAddress);
         }
     }
-    
+
     /**
      * @notice Execute reduce reserve and burn on multiple cTokens
      * @param cTokens The token address list
@@ -157,6 +160,7 @@ contract ReserveManager is Ownable {
         }
         IBurner(usdcBurner).burn(usdcAddress);
     }
+
     /* Admin functions */
 
     function setCTokenAdmins(address[] memory cTokens, address[] memory newCTokenAdmins) external onlyOwner {
@@ -185,7 +189,7 @@ contract ReserveManager is Ownable {
     }
 
     function adjustRatio(uint newRatio) external onlyOwner {
-        require(newRatio < 1e18, "invalid ratio");
+        require(newRatio <= 1e18, "invalid ratio");
 
         uint oldRatio = ratio;
         ratio = newRatio;
