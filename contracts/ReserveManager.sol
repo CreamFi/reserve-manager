@@ -8,12 +8,13 @@ import "./interfaces/IComptroller.sol";
 import "./interfaces/ICToken.sol";
 import "./interfaces/ICTokenAdmin.sol";
 import "./interfaces/IBurner.sol";
+import "./interfaces/IWeth.sol";
 
 contract ReserveManager is Ownable {
     using SafeERC20 for IERC20;
 
     uint public constant COOLDOWN_PERIOD = 1 days;
-    address public constant ethAddress = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
+    address public constant wethAddress = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address public constant usdcAddress = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
 
     /**
@@ -123,11 +124,12 @@ contract ReserveManager is Ownable {
             // Get the cToken underlying.
             address underlying;
             if (compareStrings(ICToken(cToken).symbol(), "crETH")) {
-                underlying = ethAddress;
+                IWeth(wethAddress).deposit{value: reduceAmount}();
+                underlying = wethAddress;
             } else {
                 underlying = ICToken(cToken).underlying();
             }
-
+            IERC20(underlying).approve(burner, reduceAmount);
             require(IBurner(burner).burn(underlying), "Burner failed to burn the underlying token");
 
             // TODO: fix event for dispatch.
