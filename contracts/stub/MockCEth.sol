@@ -27,4 +27,8 @@ contract MockCEth {
     function setTotalReserves(uint totalReserves_) external {
         _totalReserves = totalReserves_;
     }
+
+    function reduceReserves(uint amount) external {
+        _totalReserves = _totalReserves - amount;
+    }
 }
