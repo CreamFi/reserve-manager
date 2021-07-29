@@ -14,18 +14,27 @@ contract ReserveManager is Ownable {
     using SafeERC20 for IERC20;
 
     uint public constant COOLDOWN_PERIOD = 1 days;
-    address public constant wethAddress = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
-    address public constant usdcAddress = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
 
     /**
      * @notice comptroller contract
      */
     IComptroller public immutable comptroller;
 
-     /**
+    /**
      * @notice usdc burner contract
      */
     IBurner public immutable usdcBurner;
+
+    /**
+     * @notice weth contract
+     */
+    address public immutable wethAddress;
+
+    /**
+     * @notice usdc contract
+     */
+    address public immutable usdcAddress;
+
     /**
      * @notice the extraction ratio, scaled by 1e18
      */
@@ -56,8 +65,7 @@ contract ReserveManager is Ownable {
      */
     event Dispatch(
         address indexed token,
-        uint indexed amountIn,
-        uint indexed amountOut
+        uint indexed amount
     );
 
     /**
@@ -89,16 +97,24 @@ contract ReserveManager is Ownable {
     constructor(
         address _owner,
         IComptroller _comptroller,
-        IBurner _usdcBurner
+        IBurner _usdcBurner,
+        address _wethAddress,
+        address _usdcAddress
     ) {
         transferOwnership(_owner);
         comptroller = _comptroller;
         usdcBurner = _usdcBurner;
+        wethAddress = _wethAddress;
+        usdcAddress = _usdcAddress;
 
         // Set default ratio to 50%.
         ratio = 0.5e18;
     }
 
+    /**
+     * @notice Get the current block timestamp
+     * @return The current block timestamp
+     */
     function getBlockTimestamp() public virtual view returns (uint) {
         return block.timestamp;
     }
@@ -113,16 +129,20 @@ contract ReserveManager is Ownable {
 
         uint totalReserves = ICToken(cToken).totalReserves();
         ReservesSnapshot memory snapshot = reservesSnapshot[cToken];
-        if (snapshot.totalReserves >= totalReserves) {
+        if (snapshot.timestamp > 0 && snapshot.totalReserves < totalReserves) {
             address cTokenAdmin = cTokenAdmins[cToken];
             address burner = burners[cToken];
-            require(cTokenAdmin != address(0), "cToken admin not set");
+            require(cTokenAdmin == ICToken(cToken).admin(), "mismatch cToken admin");
             require(burner != address(0), "burner not set");
             require(snapshot.timestamp + COOLDOWN_PERIOD <= getBlockTimestamp(), "still in the cooldown period");
 
             // Extract reserves through cTokenAdmin.
             uint reduceAmount = (totalReserves - snapshot.totalReserves) * ratio / 1e18;
             ICTokenAdmin(cTokenAdmin).extractReserves(cToken, reduceAmount);
+
+            // After the extraction, the reserves in cToken should decrease.
+            // Instead of getting reserves from cToken again, we subtract `totalReserves` with `reduceAmount` to save gas.
+            totalReserves = totalReserves - reduceAmount;
 
             // Get the cToken underlying.
             address underlying;
@@ -132,11 +152,14 @@ contract ReserveManager is Ownable {
             } else {
                 underlying = ICToken(cToken).underlying();
             }
-            IERC20(underlying).approve(burner, reduceAmount);
+
+            // In case someone transfers tokens in directly, which will cause the dispatch reverted,
+            // we burn all the tokens in the contract here.
+            uint burnAmount = IERC20(underlying).balanceOf(address(this));
+            IERC20(underlying).approve(burner, burnAmount);
             require(IBurner(burner).burn(underlying), "Burner failed to burn the underlying token");
 
-            // TODO: fix event for dispatch.
-            emit Dispatch(underlying, reduceAmount, 0);
+            emit Dispatch(underlying, burnAmount);
         }
 
         // Update the reserve snapshot.
@@ -144,6 +167,7 @@ contract ReserveManager is Ownable {
             timestamp: getBlockTimestamp(),
             totalReserves: totalReserves
         });
+
         // A standalone reduce-reserve operation followed by a final USDC burn
         if (!batchJob){
             IBurner(usdcBurner).burn(usdcAddress);
@@ -161,14 +185,21 @@ contract ReserveManager is Ownable {
         IBurner(usdcBurner).burn(usdcAddress);
     }
 
+    receive() external payable {}
+
     /* Admin functions */
 
+    /**
+     * @notice Set the admins of a list of cTokens
+     * @param cTokens The cToken address list
+     * @param newCTokenAdmins The admin address list
+     */
     function setCTokenAdmins(address[] memory cTokens, address[] memory newCTokenAdmins) external onlyOwner {
         require(cTokens.length == newCTokenAdmins.length, "invalid data");
 
         for (uint i = 0; i < cTokens.length; i++) {
             require(comptroller.isMarketListed(cTokens[i]), "market not listed");
-            require(ICToken(cTokens[i]).admin() == newCTokenAdmins[i], "mismatch admin");
+            require(ICToken(cTokens[i]).admin() == newCTokenAdmins[i], "mismatch cToken admin");
 
             address oldAdmin = cTokenAdmins[cTokens[i]];
             cTokenAdmins[cTokens[i]] = newCTokenAdmins[i];
@@ -177,6 +208,11 @@ contract ReserveManager is Ownable {
         }
     }
 
+    /**
+     * @notice Set the burners of a list of tokens
+     * @param tokens The token address list
+     * @param newBurners The burner address list
+     */
     function setBurners(address[] memory tokens, address[] memory newBurners) external onlyOwner {
         require(tokens.length == newBurners.length, "invalid data");
 
@@ -188,6 +224,10 @@ contract ReserveManager is Ownable {
         }
     }
 
+    /**
+     * @notice Adjust the extraction ratio
+     * @param newRatio The new extraction ratio
+     */
     function adjustRatio(uint newRatio) external onlyOwner {
         require(newRatio <= 1e18, "invalid ratio");
 
@@ -198,6 +238,12 @@ contract ReserveManager is Ownable {
 
     /* Internal functions */
 
+    /**
+     * @notice Compare whether the two strings are the same
+     * @param a The first string
+     * @param b The second string
+     * @return Two strings are the same or not
+     */
     function compareStrings(string memory a, string memory b) private pure returns (bool) {
         return (keccak256(abi.encodePacked((a))) == keccak256(abi.encodePacked((b))));
     }
