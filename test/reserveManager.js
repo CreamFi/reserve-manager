@@ -146,8 +146,22 @@ describe('ReserveManager', () => {
       expect(await provider.getBalance(reserveManager.address)).to.eq(0);
     });
 
-    it('failed to adjust ratio for non-owner', async () => {
+    it('failed to seize for non-owner', async () => {
       await expect(reserveManager.seize(ethAddress, toWei('1'))).to.be.revertedWith('Ownable: caller is not the owner');
+    });
+  });
+
+  describe('setBlocked', async () => {
+    it('sets successfully', async () => {
+      await reserveManager.connect(owner).setBlocked(cToken.address, true);
+      expect(await reserveManager.isBlocked(cToken.address)).to.eq(true);
+
+      await reserveManager.connect(owner).setBlocked(cToken.address, false);
+      expect(await reserveManager.isBlocked(cToken.address)).to.eq(false);
+    });
+
+    it('failed to set block for non-owner', async () => {
+      await expect(reserveManager.setBlocked(cToken.address, true)).to.be.revertedWith('Ownable: caller is not the owner');
     });
   });
 
@@ -348,6 +362,11 @@ describe('ReserveManager', () => {
       expect(cOtherSnapshot2.timestamp).to.eq(timestamp);
       expect(cOtherSnapshot2.totalReserves).to.eq(0);
       expect(await underlying.balanceOf(burner.address)).to.eq(0);
+    });
+
+    it('failed to dispatch for market blocked from reserves sharing', async () => {
+      await reserveManager.connect(owner).setBlocked(cOther.address, true);
+      await expect(reserveManager.dispatchMultiple([cOther.address])).to.be.revertedWith('market is blocked from reserves sharing');
     });
 
     it('failed to dispatch for market not listed', async () => {
