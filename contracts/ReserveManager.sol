@@ -14,6 +14,7 @@ contract ReserveManager is Ownable {
     using SafeERC20 for IERC20;
 
     uint public constant COOLDOWN_PERIOD = 1 days;
+    address public constant ethAddress = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
 
     /**
      * @notice comptroller contract
@@ -188,6 +189,19 @@ contract ReserveManager is Ownable {
     receive() external payable {}
 
     /* Admin functions */
+
+    /**
+     * @notice Seize the accidentally deposited tokens
+     * @param token The token
+     * @param amount The amount
+     */
+    function seize(IERC20 token, uint amount) external onlyOwner {
+        if (address(token) == ethAddress) {
+            payable(owner()).transfer(amount);
+        } else {
+            token.safeTransfer(owner(), amount);
+        }
+    }
 
     /**
      * @notice Set the admins of a list of cTokens
