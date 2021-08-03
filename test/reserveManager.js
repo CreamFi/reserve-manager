@@ -120,6 +120,37 @@ describe('ReserveManager', () => {
     });
   });
 
+  describe('seize', async () => {
+    const ethAddress = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
+
+    beforeEach(async () => {
+      await Promise.all([
+        usdc.mint(reserveManager.address, 1e6),
+        root.sendTransaction({to: reserveManager.address, value: toWei('1')})
+      ]);
+    });
+
+    it('seizes tokens', async () => {
+      await reserveManager.connect(owner).seize(usdc.address, 1e6);
+      expect(await usdc.balanceOf(ownerAddress)).to.eq(1e6);
+      expect(await usdc.balanceOf(reserveManager.address)).to.eq(0);
+    });
+
+    it('seizes ethers', async () => {
+      const ethBalance1 = await provider.getBalance(ownerAddress);
+      const tx = await reserveManager.connect(owner).seize(ethAddress, toWei('1'));
+      const result = await tx.wait();
+      const gas = result.gasUsed.mul(tx.gasPrice);
+      const ethBalance2 = await provider.getBalance(ownerAddress);
+      expect(ethBalance2.sub(ethBalance1).add(gas)).to.eq(toWei('1'));
+      expect(await provider.getBalance(reserveManager.address)).to.eq(0);
+    });
+
+    it('failed to adjust ratio for non-owner', async () => {
+      await expect(reserveManager.seize(ethAddress, toWei('1'))).to.be.revertedWith('Ownable: caller is not the owner');
+    });
+  });
+
   describe('dispatch', async () => {
     const initTimestamp = 10000;
     const initReserves = toWei('1');
