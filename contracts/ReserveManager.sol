@@ -224,17 +224,17 @@ contract ReserveManager is Ownable {
 
     /**
      * @notice Set the burners of a list of tokens
-     * @param tokens The token address list
+     * @param cTokens The cToken address list
      * @param newBurners The burner address list
      */
-    function setBurners(address[] memory tokens, address[] memory newBurners) external onlyOwner {
-        require(tokens.length == newBurners.length, "invalid data");
+    function setBurners(address[] memory cTokens, address[] memory newBurners) external onlyOwner {
+        require(cTokens.length == newBurners.length, "invalid data");
 
-        for (uint i = 0; i < tokens.length; i++) {
-            address oldBurner = burners[tokens[i]];
-            burners[tokens[i]] = newBurners[i];
+        for (uint i = 0; i < cTokens.length; i++) {
+            address oldBurner = burners[cTokens[i]];
+            burners[cTokens[i]] = newBurners[i];
 
-            emit BurnerUpdated(tokens[i], oldBurner, newBurners[i]);
+            emit BurnerUpdated(cTokens[i], oldBurner, newBurners[i]);
         }
     }
 
