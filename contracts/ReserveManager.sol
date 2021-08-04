@@ -62,6 +62,11 @@ contract ReserveManager is Ownable {
     mapping(address => ReservesSnapshot) public reservesSnapshot;
 
     /**
+     * @notice return if a cToken market is blocked from reserves sharing
+     */
+    mapping(address => bool) public isBlocked;
+
+    /**
      * @notice Emitted when reserves are dispatched
      */
     event Dispatch(
@@ -95,6 +100,22 @@ contract ReserveManager is Ownable {
         uint newRatio
     );
 
+    /**
+     * @notice Emitted when a token is seized
+     */
+    event TokenSeized(
+        address token,
+        uint amount
+    );
+
+    /**
+     * @notice Emitted when a cToken market is blocked or unblocked from reserves sharing
+     */
+    event MarketBlocked(
+        address cToken,
+        bool blocked
+    );
+
     constructor(
         address _owner,
         IComptroller _comptroller,
@@ -126,6 +147,7 @@ contract ReserveManager is Ownable {
      * @param batchJob indicate whether this function call is within a multiple cToken batch job
      */
     function dispatch(address cToken, bool batchJob) external {
+        require(!isBlocked[cToken], "market is blocked from reserves sharing");
         require(comptroller.isMarketListed(cToken), "market not listed");
 
         uint totalReserves = ICToken(cToken).totalReserves();
@@ -195,12 +217,24 @@ contract ReserveManager is Ownable {
      * @param token The token
      * @param amount The amount
      */
-    function seize(IERC20 token, uint amount) external onlyOwner {
-        if (address(token) == ethAddress) {
+    function seize(address token, uint amount) external onlyOwner {
+        if (token == ethAddress) {
             payable(owner()).transfer(amount);
         } else {
-            token.safeTransfer(owner(), amount);
+            IERC20(token).safeTransfer(owner(), amount);
         }
+        emit TokenSeized(token, amount);
+    }
+
+    /**
+     * @notice Block or unblock a cToken from reserves sharing
+     * @param cToken The cToken
+     * @param blocked Block from reserves sharing or not
+     */
+    function setBlocked(address cToken, bool blocked) external onlyOwner {
+        isBlocked[cToken] = blocked;
+
+        emit MarketBlocked(cToken, blocked);
     }
 
     /**
