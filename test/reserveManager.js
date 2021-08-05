@@ -8,6 +8,7 @@ describe('ReserveManager', () => {
   let accounts;
   let root, rootAddress;
   let owner, ownerAddress;
+  let manualBurner, manualBurnerAddress;
   let user, userAddress;
 
   let usdcBurner;
@@ -28,7 +29,9 @@ describe('ReserveManager', () => {
     rootAddress = await root.getAddress();
     owner = accounts[1];
     ownerAddress = await owner.getAddress();
-    user = accounts[2];
+    manualBurner = accounts[2];
+    manualBurnerAddress = await manualBurner.getAddress();
+    user = accounts[3];
     userAddress = await user.getAddress();
 
     const burnerFactory = await ethers.getContractFactory("MockBurner");
@@ -45,7 +48,7 @@ describe('ReserveManager', () => {
     comptroller = await comptrollerFactory.deploy();
     weth = await wEthFactory.deploy();
     usdc = await tokenFactory.deploy();
-    reserveManager = await reserveManagerFactory.deploy(ownerAddress, comptroller.address, usdcBurner.address, weth.address, usdc.address);
+    reserveManager = await reserveManagerFactory.deploy(ownerAddress, manualBurnerAddress, comptroller.address, usdcBurner.address, weth.address, usdc.address);
     underlying = await tokenFactory.deploy();
     cTokenAdmin = await cTokenAdminFactory.deploy();
     cToken = await cTokenFactory.deploy(cTokenAdmin.address, underlying.address);
@@ -152,16 +155,51 @@ describe('ReserveManager', () => {
   });
 
   describe('setBlocked', async () => {
-    it('sets successfully', async () => {
-      await reserveManager.connect(owner).setBlocked(cToken.address, true);
+    it('sets block successfully', async () => {
+      await reserveManager.connect(owner).setBlocked([cToken.address], [true]);
       expect(await reserveManager.isBlocked(cToken.address)).to.eq(true);
 
-      await reserveManager.connect(owner).setBlocked(cToken.address, false);
+      await reserveManager.connect(owner).setBlocked([cToken.address], [false]);
       expect(await reserveManager.isBlocked(cToken.address)).to.eq(false);
     });
 
     it('failed to set block for non-owner', async () => {
-      await expect(reserveManager.setBlocked(cToken.address, true)).to.be.revertedWith('Ownable: caller is not the owner');
+      await expect(reserveManager.setBlocked([cToken.address], [true])).to.be.revertedWith('Ownable: caller is not the owner');
+    });
+
+    it('failed to set block for invalid data', async () => {
+      await expect(reserveManager.connect(owner).setBlocked([cToken.address], [true, true])).to.be.revertedWith('invalid data');
+    });
+  });
+
+  describe('setManualBurn', async () => {
+    it('sets manual burn successfully', async () => {
+      await reserveManager.connect(owner).setManualBurn([cToken.address, cEth.address], [true, true]);
+      expect(await reserveManager.manualBurn(cToken.address)).to.eq(true);
+      expect(await reserveManager.manualBurn(cEth.address)).to.eq(true);
+    });
+
+    it('failed to set manual burn for non-owner', async () => {
+      await expect(reserveManager.setManualBurn([cToken.address, cEth.address], [true, true])).to.be.revertedWith('Ownable: caller is not the owner');
+    });
+
+    it('failed to set manual burn for invalid data', async () => {
+      await expect(reserveManager.connect(owner).setManualBurn([cToken.address], [true, true])).to.be.revertedWith('invalid data');
+    });
+  });
+
+  describe('setManualBurner', async () => {
+    it('sets manual burner successfully', async () => {
+      await reserveManager.connect(owner).setManualBurner(userAddress);
+      expect(await reserveManager.manualBurner()).to.eq(userAddress);
+    });
+
+    it('failed to set manual burner for non-owner', async () => {
+      await expect(reserveManager.setManualBurner(userAddress)).to.be.revertedWith('Ownable: caller is not the owner');
+    });
+
+    it('failed to set manual burner for invalid new manual burner', async () => {
+      await expect(reserveManager.connect(owner).setManualBurner(ethers.constants.AddressZero)).to.be.revertedWith('invalid new manual burner');
     });
   });
 
@@ -364,8 +402,31 @@ describe('ReserveManager', () => {
       expect(await underlying.balanceOf(burner.address)).to.eq(0);
     });
 
+    it('dispatches to the manual burner', async () => {
+      await reserveManager.connect(owner).setManualBurn([cToken.address], [true]);
+
+      // Initialize the snapshot.
+      await reserveManager.dispatchMultiple([cToken.address]);
+
+      const timestamp = 100000; // 1 day later, 100000 > 10000 + 86400
+      const reserves = toWei('2'); // 1 -> 2
+      await Promise.all([
+        reserveManager.setBlockTimestamp(timestamp),
+        cToken.setTotalReserves(reserves)
+      ]);
+
+      // Dispatch!
+      await reserveManager.dispatchMultiple([cToken.address]);
+      const cTokenSnapshot = await reserveManager.reservesSnapshot(cToken.address);
+      const cTokenReserves = await cToken.totalReserves();
+      expect(cTokenReserves).to.eq(toWei('1.5')); // 1 + (2 - 1) * 0.5
+      expect(cTokenSnapshot.timestamp).to.eq(timestamp);
+      expect(cTokenSnapshot.totalReserves).to.eq(cTokenReserves);
+      expect(await underlying.balanceOf(manualBurnerAddress)).to.eq(toWei('0.5'));
+    });
+
     it('failed to dispatch for market blocked from reserves sharing', async () => {
-      await reserveManager.connect(owner).setBlocked(cOther.address, true);
+      await reserveManager.connect(owner).setBlocked([cOther.address], [true]);
       await expect(reserveManager.dispatchMultiple([cOther.address])).to.be.revertedWith('market is blocked from reserves sharing');
     });
 

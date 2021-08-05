@@ -67,11 +67,22 @@ contract ReserveManager is Ownable {
     mapping(address => bool) public isBlocked;
 
     /**
+     * @notice return if a cToken market should be burnt manually
+     */
+    mapping(address => bool) public manualBurn;
+
+    /**
+     * @notice a manual burner that reseives assets whose onchain liquidity are not deep enough
+     */
+    address public manualBurner;
+
+    /**
      * @notice Emitted when reserves are dispatched
      */
     event Dispatch(
         address indexed token,
-        uint indexed amount
+        uint indexed amount,
+        address destination
     );
 
     /**
@@ -113,17 +124,37 @@ contract ReserveManager is Ownable {
      */
     event MarketBlocked(
         address cToken,
-        bool blocked
+        bool wasBlocked,
+        bool isBlocked
+    );
+
+    /**
+     * @notice Emitted when a cToken market is determined to be manually burnt or not
+     */
+    event MarketManualBurn(
+        address cToken,
+        bool wasManual,
+        bool isManual
+    );
+
+    /**
+     * @notice Emitted when a manual burner is updated
+     */
+    event ManualBurnerUpdated(
+        address oldManualBurner,
+        address newManualBurner
     );
 
     constructor(
         address _owner,
+        address _manualBurner,
         IComptroller _comptroller,
         IBurner _usdcBurner,
         address _wethAddress,
         address _usdcAddress
     ) {
         transferOwnership(_owner);
+        manualBurner = _manualBurner;
         comptroller = _comptroller;
         usdcBurner = _usdcBurner;
         wethAddress = _wethAddress;
@@ -154,9 +185,7 @@ contract ReserveManager is Ownable {
         ReservesSnapshot memory snapshot = reservesSnapshot[cToken];
         if (snapshot.timestamp > 0 && snapshot.totalReserves < totalReserves) {
             address cTokenAdmin = cTokenAdmins[cToken];
-            address burner = burners[cToken];
             require(cTokenAdmin == ICToken(cToken).admin(), "mismatch cToken admin");
-            require(burner != address(0), "burner not set");
             require(snapshot.timestamp + COOLDOWN_PERIOD <= getBlockTimestamp(), "still in the cooldown period");
 
             // Extract reserves through cTokenAdmin.
@@ -179,10 +208,20 @@ contract ReserveManager is Ownable {
             // In case someone transfers tokens in directly, which will cause the dispatch reverted,
             // we burn all the tokens in the contract here.
             uint burnAmount = IERC20(underlying).balanceOf(address(this));
-            IERC20(underlying).approve(burner, burnAmount);
-            require(IBurner(burner).burn(underlying), "Burner failed to burn the underlying token");
 
-            emit Dispatch(underlying, burnAmount);
+            address burner = burners[cToken];
+            if (manualBurn[cToken]) {
+                // Send the underlying to the manual burner.
+                burner = manualBurner;
+                IERC20(underlying).safeTransfer(manualBurner, burnAmount);
+            } else {
+                // Allow the corresponding burner to pull the assets to burn.
+                require(burner != address(0), "burner not set");
+                IERC20(underlying).approve(burner, burnAmount);
+                require(IBurner(burner).burn(underlying), "Burner failed to burn the underlying token");
+            }
+
+            emit Dispatch(underlying, burnAmount, burner);
         }
 
         // Update the reserve snapshot.
@@ -228,13 +267,18 @@ contract ReserveManager is Ownable {
 
     /**
      * @notice Block or unblock a cToken from reserves sharing
-     * @param cToken The cToken
+     * @param cTokens The cToken address list
      * @param blocked Block from reserves sharing or not
      */
-    function setBlocked(address cToken, bool blocked) external onlyOwner {
-        isBlocked[cToken] = blocked;
+    function setBlocked(address[] memory cTokens, bool[] memory blocked) external onlyOwner {
+        require(cTokens.length == blocked.length, "invalid data");
 
-        emit MarketBlocked(cToken, blocked);
+        for (uint i = 0; i < cTokens.length; i++) {
+            bool wasBlocked = isBlocked[cTokens[i]];
+            isBlocked[cTokens[i]] = blocked[i];
+
+            emit MarketBlocked(cTokens[i], wasBlocked, blocked[i]);
+        }
     }
 
     /**
@@ -270,6 +314,35 @@ contract ReserveManager is Ownable {
 
             emit BurnerUpdated(cTokens[i], oldBurner, newBurners[i]);
         }
+    }
+
+    /**
+     * @notice Determine a market should be burnt manually or not
+     * @param cTokens The cToken address list
+     * @param manual The list of markets which should be burnt manually or not
+     */
+    function setManualBurn(address[] memory cTokens, bool[] memory manual) external onlyOwner {
+        require(cTokens.length == manual.length, "invalid data");
+
+        for (uint i = 0; i < cTokens.length; i++) {
+            bool wasManual = manualBurn[cTokens[i]];
+            manualBurn[cTokens[i]] = manual[i];
+
+            emit MarketManualBurn(cTokens[i], wasManual, manual[i]);
+        }
+    }
+
+    /**
+     * @notice Set new manual burner
+     * @param newManualBurner The new manual burner
+     */
+    function setManualBurner(address newManualBurner) external onlyOwner {
+        require(newManualBurner != address(0), "invalid new manual burner");
+
+        address oldManualBurner = manualBurner;
+        manualBurner = newManualBurner;
+
+        emit ManualBurnerUpdated(oldManualBurner, newManualBurner);
     }
 
     /**
