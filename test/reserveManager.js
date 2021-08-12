@@ -203,7 +203,7 @@ describe('ReserveManager', () => {
     });
   });
 
-  describe('dispatch', async () => {
+  describe('dispatchMultiple', async () => {
     const initTimestamp = 10000;
     const initReserves = toWei('1');
 
