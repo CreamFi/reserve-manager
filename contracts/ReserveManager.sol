@@ -3,6 +3,7 @@
 pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./interfaces/IComptroller.sol";
 import "./interfaces/ICToken.sol";
@@ -10,7 +11,7 @@ import "./interfaces/ICTokenAdmin.sol";
 import "./interfaces/IBurner.sol";
 import "./interfaces/IWeth.sol";
 
-contract ReserveManager is Ownable {
+contract ReserveManager is Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     uint public constant COOLDOWN_PERIOD = 1 days;
@@ -173,76 +174,12 @@ contract ReserveManager is Ownable {
     }
 
     /**
-     * @notice Execute reduce reserve for cToken
-     * @param cToken The cToken to dispatch reduce reserve operation
-     * @param batchJob indicate whether this function call is within a multiple cToken batch job
-     */
-    function dispatch(address cToken, bool batchJob) external {
-        require(!isBlocked[cToken], "market is blocked from reserves sharing");
-        require(comptroller.isMarketListed(cToken), "market not listed");
-
-        uint totalReserves = ICToken(cToken).totalReserves();
-        ReservesSnapshot memory snapshot = reservesSnapshot[cToken];
-        if (snapshot.timestamp > 0 && snapshot.totalReserves < totalReserves) {
-            address cTokenAdmin = cTokenAdmins[cToken];
-            require(cTokenAdmin == ICToken(cToken).admin(), "mismatch cToken admin");
-            require(snapshot.timestamp + COOLDOWN_PERIOD <= getBlockTimestamp(), "still in the cooldown period");
-
-            // Extract reserves through cTokenAdmin.
-            uint reduceAmount = (totalReserves - snapshot.totalReserves) * ratio / 1e18;
-            ICTokenAdmin(cTokenAdmin).extractReserves(cToken, reduceAmount);
-
-            // After the extraction, the reserves in cToken should decrease.
-            // Instead of getting reserves from cToken again, we subtract `totalReserves` with `reduceAmount` to save gas.
-            totalReserves = totalReserves - reduceAmount;
-
-            // Get the cToken underlying.
-            address underlying;
-            if (compareStrings(ICToken(cToken).symbol(), "crETH")) {
-                IWeth(wethAddress).deposit{value: reduceAmount}();
-                underlying = wethAddress;
-            } else {
-                underlying = ICToken(cToken).underlying();
-            }
-
-            // In case someone transfers tokens in directly, which will cause the dispatch reverted,
-            // we burn all the tokens in the contract here.
-            uint burnAmount = IERC20(underlying).balanceOf(address(this));
-
-            address burner = burners[cToken];
-            if (manualBurn[cToken]) {
-                // Send the underlying to the manual burner.
-                burner = manualBurner;
-                IERC20(underlying).safeTransfer(manualBurner, burnAmount);
-            } else {
-                // Allow the corresponding burner to pull the assets to burn.
-                require(burner != address(0), "burner not set");
-                IERC20(underlying).approve(burner, burnAmount);
-                require(IBurner(burner).burn(underlying), "Burner failed to burn the underlying token");
-            }
-
-            emit Dispatch(underlying, burnAmount, burner);
-        }
-
-        // Update the reserve snapshot.
-        reservesSnapshot[cToken] = ReservesSnapshot({
-            timestamp: getBlockTimestamp(),
-            totalReserves: totalReserves
-        });
-
-        // A standalone reduce-reserve operation followed by a final USDC burn
-        if (!batchJob){
-            IBurner(usdcBurner).burn(usdcAddress);
-        }
-    }
-
-    /**
      * @notice Execute reduce reserve and burn on multiple cTokens
      * @param cTokens The token address list
      */
-    function dispatchMultiple(address[] memory cTokens) external {
+    function dispatchMultiple(address[] memory cTokens) external nonReentrant {
         for (uint i = 0; i < cTokens.length; i++) {
-            this.dispatch(cTokens[i], true);
+            dispatch(cTokens[i], true);
         }
         IBurner(usdcBurner).burn(usdcAddress);
     }
@@ -365,7 +302,71 @@ contract ReserveManager is Ownable {
      * @param b The second string
      * @return Two strings are the same or not
      */
-    function compareStrings(string memory a, string memory b) private pure returns (bool) {
+    function compareStrings(string memory a, string memory b) internal pure returns (bool) {
         return (keccak256(abi.encodePacked((a))) == keccak256(abi.encodePacked((b))));
+    }
+
+    /**
+     * @notice Execute reduce reserve for cToken
+     * @param cToken The cToken to dispatch reduce reserve operation
+     * @param batchJob indicate whether this function call is within a multiple cToken batch job
+     */
+    function dispatch(address cToken, bool batchJob) internal {
+        require(!isBlocked[cToken], "market is blocked from reserves sharing");
+        require(comptroller.isMarketListed(cToken), "market not listed");
+
+        uint totalReserves = ICToken(cToken).totalReserves();
+        ReservesSnapshot memory snapshot = reservesSnapshot[cToken];
+        if (snapshot.timestamp > 0 && snapshot.totalReserves < totalReserves) {
+            address cTokenAdmin = cTokenAdmins[cToken];
+            require(cTokenAdmin == ICToken(cToken).admin(), "mismatch cToken admin");
+            require(snapshot.timestamp + COOLDOWN_PERIOD <= getBlockTimestamp(), "still in the cooldown period");
+
+            // Extract reserves through cTokenAdmin.
+            uint reduceAmount = (totalReserves - snapshot.totalReserves) * ratio / 1e18;
+            ICTokenAdmin(cTokenAdmin).extractReserves(cToken, reduceAmount);
+
+            // After the extraction, the reserves in cToken should decrease.
+            // Instead of getting reserves from cToken again, we subtract `totalReserves` with `reduceAmount` to save gas.
+            totalReserves = totalReserves - reduceAmount;
+
+            // Get the cToken underlying.
+            address underlying;
+            if (compareStrings(ICToken(cToken).symbol(), "crETH")) {
+                IWeth(wethAddress).deposit{value: reduceAmount}();
+                underlying = wethAddress;
+            } else {
+                underlying = ICToken(cToken).underlying();
+            }
+
+            // In case someone transfers tokens in directly, which will cause the dispatch reverted,
+            // we burn all the tokens in the contract here.
+            uint burnAmount = IERC20(underlying).balanceOf(address(this));
+
+            address burner = burners[cToken];
+            if (manualBurn[cToken]) {
+                // Send the underlying to the manual burner.
+                burner = manualBurner;
+                IERC20(underlying).safeTransfer(manualBurner, burnAmount);
+            } else {
+                // Allow the corresponding burner to pull the assets to burn.
+                require(burner != address(0), "burner not set");
+                IERC20(underlying).approve(burner, burnAmount);
+                require(IBurner(burner).burn(underlying), "Burner failed to burn the underlying token");
+            }
+
+            emit Dispatch(underlying, burnAmount, burner);
+        }
+
+        // Update the reserve snapshot.
+        reservesSnapshot[cToken] = ReservesSnapshot({
+            timestamp: getBlockTimestamp(),
+            totalReserves: totalReserves
+        });
+
+        // A standalone reduce-reserve operation followed by a final USDC burn
+        if (!batchJob){
+            IBurner(usdcBurner).burn(usdcAddress);
+        }
     }
 }
