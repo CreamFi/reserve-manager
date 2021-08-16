@@ -351,7 +351,7 @@ contract ReserveManager is Ownable, ReentrancyGuard {
             } else {
                 // Allow the corresponding burner to pull the assets to burn.
                 require(burner != address(0), "burner not set");
-                IERC20(underlying).approve(burner, burnAmount);
+                IERC20(underlying).safeIncreaseAllowance(burner, burnAmount);
                 require(IBurner(burner).burn(underlying), "Burner failed to burn the underlying token");
             }
 
