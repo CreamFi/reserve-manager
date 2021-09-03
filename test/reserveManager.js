@@ -13,6 +13,7 @@ describe('ReserveManager', () => {
 
   let usdcBurner;
   let burner;
+  let newBurner;
   let comptroller;
   let reserveManager;
   let underlying;
@@ -45,6 +46,7 @@ describe('ReserveManager', () => {
 
     usdcBurner = await burnerFactory.deploy();
     burner = await burnerFactory.deploy();
+    newBurner = await burnerFactory.deploy();
     comptroller = await comptrollerFactory.deploy();
     weth = await wEthFactory.deploy();
     usdc = await tokenFactory.deploy();
@@ -200,6 +202,17 @@ describe('ReserveManager', () => {
 
     it('failed to set manual burner for invalid new manual burner', async () => {
       await expect(reserveManager.connect(owner).setManualBurner(ethers.constants.AddressZero)).to.be.revertedWith('invalid new manual burner');
+    });
+  });
+
+  describe('setUsdcBurner', async () => {
+    it('sets usdc burner successfully', async () => {
+      await reserveManager.connect(owner).setUsdcBurner(newBurner.address);
+      expect(await reserveManager.usdcBurner()).to.eq(newBurner.address);
+    });
+
+    it('failed to set usdc burner for non-owner', async () => {
+      await expect(reserveManager.setUsdcBurner(newBurner.address)).to.be.revertedWith('Ownable: caller is not the owner');
     });
   });
 
