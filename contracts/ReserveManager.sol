@@ -23,11 +23,6 @@ contract ReserveManager is Ownable, ReentrancyGuard {
     IComptroller public immutable comptroller;
 
     /**
-     * @notice usdc burner contract
-     */
-    IBurner public immutable usdcBurner;
-
-    /**
      * @notice weth contract
      */
     address public immutable wethAddress;
@@ -41,6 +36,11 @@ contract ReserveManager is Ownable, ReentrancyGuard {
      * @notice the extraction ratio, scaled by 1e18
      */
     uint public ratio = 0.5e18;
+
+    /**
+     * @notice usdc burner contract
+     */
+    IBurner public usdcBurner;
 
     /**
      * @notice cToken admin to extract reserves
@@ -100,6 +100,14 @@ contract ReserveManager is Ownable, ReentrancyGuard {
      */
     event BurnerUpdated(
         address cToken,
+        address oldBurner,
+        address newBurner
+    );
+
+     /**
+     * @notice Emitted when a USDC burner is updated
+     */
+    event UsdcBurnerUpdated(
         address oldBurner,
         address newBurner
     );
@@ -216,6 +224,17 @@ contract ReserveManager is Ownable, ReentrancyGuard {
 
             emit MarketBlocked(cTokens[i], wasBlocked, blocked[i]);
         }
+    }
+
+     /**
+     * @notice Set the USDC burner
+     * @param newUsdcBurner The USDC burner address
+     */
+    function setUsdcBurner(address newUsdcBurner) external onlyOwner {
+        address oldUsdcBurner = address(usdcBurner);
+        usdcBurner = IBurner(newUsdcBurner);
+
+        emit UsdcBurnerUpdated(oldUsdcBurner, newUsdcBurner);
     }
 
     /**
