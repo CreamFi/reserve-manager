@@ -11,7 +11,6 @@ describe('ReserveManager', () => {
   let manualBurner, manualBurnerAddress;
   let user, userAddress;
 
-  let usdcBurner;
   let burner;
   let newBurner;
   let comptroller;
@@ -44,50 +43,17 @@ describe('ReserveManager', () => {
     const cEthFactory = await ethers.getContractFactory("MockCEth");
     const wEthFactory = await ethers.getContractFactory("WETH");
 
-    usdcBurner = await burnerFactory.deploy();
     burner = await burnerFactory.deploy();
     newBurner = await burnerFactory.deploy();
     comptroller = await comptrollerFactory.deploy();
     weth = await wEthFactory.deploy();
     usdc = await tokenFactory.deploy();
-    reserveManager = await reserveManagerFactory.deploy(ownerAddress, manualBurnerAddress, comptroller.address, usdcBurner.address, weth.address, usdc.address);
+    reserveManager = await reserveManagerFactory.deploy(ownerAddress, manualBurnerAddress, comptroller.address, weth.address, usdc.address);
     underlying = await tokenFactory.deploy();
     cTokenAdmin = await cTokenAdminFactory.deploy();
     cToken = await cTokenFactory.deploy(cTokenAdmin.address, underlying.address);
     cOther = await cTokenFactory.deploy(cTokenAdmin.address, underlying.address);
     cEth = await cEthFactory.deploy(cTokenAdmin.address);
-  });
-
-  describe('setCTokenAdmins', async () => {
-    beforeEach(async () => {
-      await Promise.all([
-        comptroller.setmarketListed(cToken.address, true),
-        comptroller.setmarketListed(cEth.address, true)
-      ]);
-    });
-
-    it('sets cToken admin successfully', async () => {
-      await reserveManager.connect(owner).setCTokenAdmins([cToken.address, cEth.address], [cTokenAdmin.address, cTokenAdmin.address]);
-      expect(await reserveManager.cTokenAdmins(cToken.address)).to.eq(cTokenAdmin.address);
-      expect(await reserveManager.cTokenAdmins(cEth.address)).to.eq(cTokenAdmin.address);
-    });
-
-    it('failed to set cToken admin for non-owner', async () => {
-      await expect(reserveManager.setCTokenAdmins([cToken.address, cEth.address], [cTokenAdmin.address, cTokenAdmin.address])).to.be.revertedWith('Ownable: caller is not the owner');
-    });
-
-    it('failed to set cToken admin for invalid data', async () => {
-      await expect(reserveManager.connect(owner).setCTokenAdmins([cToken.address], [cTokenAdmin.address, cTokenAdmin.address])).to.be.revertedWith('invalid data');
-    });
-
-    it('failed to set cToken admin for market not listed', async () => {
-      await comptroller.setmarketListed(cToken.address, false);
-      await expect(reserveManager.connect(owner).setCTokenAdmins([cToken.address], [cTokenAdmin.address])).to.be.revertedWith('market not listed');
-    });
-
-    it('failed to set cToken admin for mismatch admin', async () => {
-      await expect(reserveManager.connect(owner).setCTokenAdmins([cToken.address], [userAddress])).to.be.revertedWith('mismatch cToken admin');
-    });
   });
 
   describe('setBurners', async () => {
@@ -205,17 +171,6 @@ describe('ReserveManager', () => {
     });
   });
 
-  describe('setUsdcBurner', async () => {
-    it('sets usdc burner successfully', async () => {
-      await reserveManager.connect(owner).setUsdcBurner(newBurner.address);
-      expect(await reserveManager.usdcBurner()).to.eq(newBurner.address);
-    });
-
-    it('failed to set usdc burner for non-owner', async () => {
-      await expect(reserveManager.setUsdcBurner(newBurner.address)).to.be.revertedWith('Ownable: caller is not the owner');
-    });
-  });
-
   describe('dispatchMultiple', async () => {
     const initTimestamp = 10000;
     const initReserves = toWei('1');
@@ -226,7 +181,6 @@ describe('ReserveManager', () => {
         comptroller.setmarketListed(cEth.address, true),
         cToken.setTotalReserves(initReserves),
         cEth.setTotalReserves(initReserves),
-        reserveManager.connect(owner).setCTokenAdmins([cToken.address, cEth.address], [cTokenAdmin.address, cTokenAdmin.address]),
         reserveManager.connect(owner).setBurners([cToken.address, cEth.address], [burner.address, burner.address]),
         reserveManager.setBlockTimestamp(initTimestamp),
         root.sendTransaction({
@@ -389,7 +343,6 @@ describe('ReserveManager', () => {
     it('does nothing if there is no reserve to extract', async () => {
       await Promise.all([
         comptroller.setmarketListed(cOther.address, true),
-        reserveManager.connect(owner).setCTokenAdmins([cOther.address], [cTokenAdmin.address]),
         reserveManager.connect(owner).setBurners([cOther.address], [burner.address]),
         reserveManager.setBlockTimestamp(initTimestamp)
       ]);
@@ -447,30 +400,10 @@ describe('ReserveManager', () => {
       await expect(reserveManager.dispatchMultiple([cOther.address])).to.be.revertedWith('market not listed');
     });
 
-    it('failed to dispatch for mismatch cToken admin', async () => {
-      await Promise.all([
-        comptroller.setmarketListed(cOther.address, true),
-        cOther.setTotalReserves(initReserves),
-        reserveManager.setBlockTimestamp(initTimestamp)
-      ]);
-
-      // Initialize the snapshot.
-      await reserveManager.dispatchMultiple([cOther.address]);
-
-      const timestamp = 100000; // 1 day later, 100000 > 10000 + 86400
-      const reserves = toWei('2'); // 1 -> 2
-      await Promise.all([
-        reserveManager.setBlockTimestamp(timestamp),
-        cOther.setTotalReserves(reserves)
-      ]);
-      await expect(reserveManager.dispatchMultiple([cOther.address])).to.be.revertedWith('mismatch cToken admin');
-    });
-
     it('failed to dispatch for burner not set', async () => {
       await Promise.all([
         comptroller.setmarketListed(cOther.address, true),
         cOther.setTotalReserves(initReserves),
-        reserveManager.connect(owner).setCTokenAdmins([cOther.address], [cTokenAdmin.address]),
         reserveManager.setBlockTimestamp(initTimestamp)
       ]);
 
@@ -490,7 +423,6 @@ describe('ReserveManager', () => {
       await Promise.all([
         comptroller.setmarketListed(cOther.address, true),
         cOther.setTotalReserves(initReserves),
-        reserveManager.connect(owner).setCTokenAdmins([cOther.address], [cTokenAdmin.address]),
         reserveManager.connect(owner).setBurners([cOther.address], [burner.address]),
         reserveManager.setBlockTimestamp(initTimestamp)
       ]);
@@ -511,7 +443,6 @@ describe('ReserveManager', () => {
       await Promise.all([
         comptroller.setmarketListed(cOther.address, true),
         cOther.setTotalReserves(initReserves),
-        reserveManager.connect(owner).setCTokenAdmins([cOther.address], [cTokenAdmin.address]),
         reserveManager.connect(owner).setBurners([cOther.address], [burner.address]),
         reserveManager.setBlockTimestamp(initTimestamp),
         burner.setBurnFailed(true)

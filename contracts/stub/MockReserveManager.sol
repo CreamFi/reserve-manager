@@ -11,10 +11,9 @@ contract MockReserveManager is ReserveManager {
         address _owner,
         address _manualBurner,
         IComptroller _comptroller,
-        IBurner _usdcBurner,
         address _wethAddress,
         address _usdcAddress
-    ) ReserveManager(_owner, _manualBurner, _comptroller, _usdcBurner, _wethAddress, _usdcAddress) {}
+    ) ReserveManager(_owner, _manualBurner, _comptroller, _wethAddress, _usdcAddress) {}
 
     function setBlockTimestamp(uint timestamp) external {
         _blockTimestamp = timestamp;
