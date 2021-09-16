@@ -38,11 +38,6 @@ contract ReserveManager is Ownable, ReentrancyGuard {
     uint public ratio = 0.5e18;
 
     /**
-     * @notice usdc burner contract
-     */
-    IBurner public usdcBurner;
-
-    /**
      * @notice cToken admin to extract reserves
      */
     mapping(address => address) public cTokenAdmins;
@@ -87,27 +82,10 @@ contract ReserveManager is Ownable, ReentrancyGuard {
     );
 
     /**
-     * @notice Emitted when a cTokenAdmin is updated
-     */
-    event CTokenAdminUpdated(
-        address cToken,
-        address oldAdmin,
-        address newAdmin
-    );
-
-    /**
      * @notice Emitted when a cToken's burner is updated
      */
     event BurnerUpdated(
         address cToken,
-        address oldBurner,
-        address newBurner
-    );
-
-     /**
-     * @notice Emitted when a USDC burner is updated
-     */
-    event UsdcBurnerUpdated(
         address oldBurner,
         address newBurner
     );
@@ -158,14 +136,12 @@ contract ReserveManager is Ownable, ReentrancyGuard {
         address _owner,
         address _manualBurner,
         IComptroller _comptroller,
-        IBurner _usdcBurner,
         address _wethAddress,
         address _usdcAddress
     ) {
         transferOwnership(_owner);
         manualBurner = _manualBurner;
         comptroller = _comptroller;
-        usdcBurner = _usdcBurner;
         wethAddress = _wethAddress;
         usdcAddress = _usdcAddress;
 
@@ -187,9 +163,8 @@ contract ReserveManager is Ownable, ReentrancyGuard {
      */
     function dispatchMultiple(address[] memory cTokens) external nonReentrant {
         for (uint i = 0; i < cTokens.length; i++) {
-            dispatch(cTokens[i], true);
+            dispatch(cTokens[i]);
         }
-        IBurner(usdcBurner).burn(usdcAddress);
     }
 
     receive() external payable {}
@@ -223,36 +198,6 @@ contract ReserveManager is Ownable, ReentrancyGuard {
             isBlocked[cTokens[i]] = blocked[i];
 
             emit MarketBlocked(cTokens[i], wasBlocked, blocked[i]);
-        }
-    }
-
-     /**
-     * @notice Set the USDC burner
-     * @param newUsdcBurner The USDC burner address
-     */
-    function setUsdcBurner(address newUsdcBurner) external onlyOwner {
-        address oldUsdcBurner = address(usdcBurner);
-        usdcBurner = IBurner(newUsdcBurner);
-
-        emit UsdcBurnerUpdated(oldUsdcBurner, newUsdcBurner);
-    }
-
-    /**
-     * @notice Set the admins of a list of cTokens
-     * @param cTokens The cToken address list
-     * @param newCTokenAdmins The admin address list
-     */
-    function setCTokenAdmins(address[] memory cTokens, address[] memory newCTokenAdmins) external onlyOwner {
-        require(cTokens.length == newCTokenAdmins.length, "invalid data");
-
-        for (uint i = 0; i < cTokens.length; i++) {
-            require(comptroller.isMarketListed(cTokens[i]), "market not listed");
-            require(ICToken(cTokens[i]).admin() == newCTokenAdmins[i], "mismatch cToken admin");
-
-            address oldAdmin = cTokenAdmins[cTokens[i]];
-            cTokenAdmins[cTokens[i]] = newCTokenAdmins[i];
-
-            emit CTokenAdminUpdated(cTokens[i], oldAdmin, newCTokenAdmins[i]);
         }
     }
 
@@ -328,26 +273,23 @@ contract ReserveManager is Ownable, ReentrancyGuard {
     /**
      * @notice Execute reduce reserve for cToken
      * @param cToken The cToken to dispatch reduce reserve operation
-     * @param batchJob indicate whether this function call is within a multiple cToken batch job
      */
-    function dispatch(address cToken, bool batchJob) internal {
+    function dispatch(address cToken) internal {
         require(!isBlocked[cToken], "market is blocked from reserves sharing");
         require(comptroller.isMarketListed(cToken), "market not listed");
 
         uint totalReserves = ICToken(cToken).totalReserves();
         ReservesSnapshot memory snapshot = reservesSnapshot[cToken];
         if (snapshot.timestamp > 0 && snapshot.totalReserves < totalReserves) {
-            address cTokenAdmin = cTokenAdmins[cToken];
-            require(cTokenAdmin == ICToken(cToken).admin(), "mismatch cToken admin");
+            address cTokenAdmin = ICToken(cToken).admin();
             require(snapshot.timestamp + COOLDOWN_PERIOD <= getBlockTimestamp(), "still in the cooldown period");
 
             // Extract reserves through cTokenAdmin.
             uint reduceAmount = (totalReserves - snapshot.totalReserves) * ratio / 1e18;
             ICTokenAdmin(cTokenAdmin).extractReserves(cToken, reduceAmount);
 
-            // After the extraction, the reserves in cToken should decrease.
-            // Instead of getting reserves from cToken again, we subtract `totalReserves` with `reduceAmount` to save gas.
-            totalReserves = totalReserves - reduceAmount;
+            // Get total reserves from cToken again for snapshots.
+            totalReserves = ICToken(cToken).totalReserves();
 
             // Get the cToken underlying.
             address underlying;
@@ -382,10 +324,5 @@ contract ReserveManager is Ownable, ReentrancyGuard {
             timestamp: getBlockTimestamp(),
             totalReserves: totalReserves
         });
-
-        // A standalone reduce-reserve operation followed by a final USDC burn
-        if (!batchJob){
-            IBurner(usdcBurner).burn(usdcAddress);
-        }
     }
 }
